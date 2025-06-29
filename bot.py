@@ -1,3 +1,4 @@
+import os
 import logging
 import json
 
@@ -22,7 +23,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Получаем токен из переменной окружения
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+if not TOKEN:
+    raise RuntimeError("Не задана переменная окружения TELEGRAM_TOKEN")
+
 # Загрузка рецептов из JSON
+
 def load_recipes(path='recipes.json'):
     try:
         with open(path, 'r', encoding='utf-8') as f:
@@ -33,14 +40,14 @@ def load_recipes(path='recipes.json'):
 recipes = load_recipes()
 categories = list(recipes.keys())
 
-# /start и /help: одинаковая клавиатура категорий
+# /start и /help: показываем категории
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    buttons = [
-        [InlineKeyboardButton(cat, callback_data=f"cat|{cat}")]
-        for cat in categories
-    ]
+    msg = update.effective_message
+    if msg is None:
+        return
+    buttons = [[InlineKeyboardButton(cat, callback_data=f"cat|{cat}")] for cat in categories]
     markup = InlineKeyboardMarkup(buttons)
-    await update.effective_message.reply_text(
+    await msg.reply_text(
         "Привет! Я CoffeeBot ☕️\nВыбери категорию:",
         reply_markup=markup
     )
@@ -51,61 +58,66 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработка нажатий inline-кнопок
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()  # убираем «часики»
+    if query is None or query.data is None or query.message is None:
+        return
+    await query.answer()
 
-    data = query.data.split("|", 1)
-    action, key = data if len(data) == 2 else (None, None)
+    action, key = query.data.split("|", 1)
 
-    # Нажали на категорию
+    # Выбрана категория
     if action == "cat":
-        drinks = list(recipes.get(key, {}).keys())
-        buttons = [
-            [InlineKeyboardButton(dr, callback_data=f"drink|{key}|{dr}")]
-            for dr in drinks
-        ]
-        # Добавим кнопку «Назад» в категории
+        drinks = list(recipes.get(key, {}))
+        buttons = [[InlineKeyboardButton(dr, callback_data=f"drink|{key}|{dr}")] for dr in drinks]
         buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back|categories")])
         markup = InlineKeyboardMarkup(buttons)
-        await query.edit_message_text(f"Категория «{key}». Выберите напиток:", reply_markup=markup)
+        await context.bot.edit_message_text(
+            chat_id=query.message.chat.id,
+            message_id=query.message.message_id,
+            text=f"Категория «{key}». Выберите напиток:",
+            reply_markup=markup
+        )
         return
 
-    # Нажали на напиток
+    # Выбран напиток
     if action == "drink":
-        category, drink = key.split("|", 1)
-        data = recipes[category][drink]
-        text = f"*{drink}*\n\n*Ингредиенты:*\n"
+        cat, dr = key.split("|", 1)
+        data = recipes.get(cat, {}).get(dr)
+        if data is None:
+            return
+        text = f"*{dr}*\n\n*Ингредиенты:*\n"
         text += "\n".join(f"- {ing}" for ing in data["ingredients"])
         text += f"\n\n*Инструкции:*\n{data['instructions']}"
-
-        # Кнопка «Назад к списку напитков»
         buttons = [
-            [InlineKeyboardButton("◀️ Назад", callback_data=f"cat|{category}")],
+            [InlineKeyboardButton("◀️ Назад", callback_data=f"cat|{cat}")],
             [InlineKeyboardButton("🏠 В начало", callback_data="back|categories")],
         ]
         markup = InlineKeyboardMarkup(buttons)
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        await context.bot.edit_message_text(
+            chat_id=query.message.chat.id,
+            message_id=query.message.message_id,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
         return
 
-    # Вернуться в категории
+    # Назад к категориям
     if action == "back" and key == "categories":
         await start(update, context)
         return
 
-# Ловим любые текстовые сообщения (для приватного чата)
+# Ловим любые текстовые сообщения (приватный чат)
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.effective_message.reply_text("Напиши /start, чтобы начать.")
+    msg = update.effective_message
+    if msg:
+        await msg.reply_text("Напиши /start, чтобы начать.")
 
-# Логируем ошибки
+# Обработка ошибок
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.error("Ошибка: %s", context.error)
 
 if __name__ == "__main__":
-    # Замените на ваш токен или возьмите из окружения
-    TOKEN = "YOUR_TOKEN_HERE"
-
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # Регистрация хэндлеров
     app.add_handler(CommandHandler(["start", "help"], start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

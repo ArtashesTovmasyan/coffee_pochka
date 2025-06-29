@@ -1,16 +1,28 @@
 import logging
 import json
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-# Enable logging
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
+
+# Включаем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Load or define coffee recipes grouped by categories
+# Загрузка рецептов из JSON
 def load_recipes(path='recipes.json'):
     try:
         with open(path, 'r', encoding='utf-8') as f:
@@ -21,53 +33,83 @@ def load_recipes(path='recipes.json'):
 recipes = load_recipes()
 categories = list(recipes.keys())
 
-# Handlers
+# /start и /help: одинаковая клавиатура категорий
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[KeyboardButton(cat)] for cat in categories]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text(
-        'Привет! Я CoffeeBot ☕️. Выбери категорию напитков:',
-        reply_markup=reply_markup
+    buttons = [
+        [InlineKeyboardButton(cat, callback_data=f"cat|{cat}")]
+        for cat in categories
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    await update.effective_message.reply_text(
+        "Привет! Я CoffeeBot ☕️\nВыбери категорию:",
+        reply_markup=markup
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        'Команды:\n'
-        '/start - начать\n'
-        '/help - справка\n'
-        'Или выберите категорию из меню.'
-    )
+    await start(update, context)
 
+# Обработка нажатий inline-кнопок
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()  # убираем «часики»
+
+    data = query.data.split("|", 1)
+    action, key = data if len(data) == 2 else (None, None)
+
+    # Нажали на категорию
+    if action == "cat":
+        drinks = list(recipes.get(key, {}).keys())
+        buttons = [
+            [InlineKeyboardButton(dr, callback_data=f"drink|{key}|{dr}")]
+            for dr in drinks
+        ]
+        # Добавим кнопку «Назад» в категории
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back|categories")])
+        markup = InlineKeyboardMarkup(buttons)
+        await query.edit_message_text(f"Категория «{key}». Выберите напиток:", reply_markup=markup)
+        return
+
+    # Нажали на напиток
+    if action == "drink":
+        category, drink = key.split("|", 1)
+        data = recipes[category][drink]
+        text = f"*{drink}*\n\n*Ингредиенты:*\n"
+        text += "\n".join(f"- {ing}" for ing in data["ingredients"])
+        text += f"\n\n*Инструкции:*\n{data['instructions']}"
+
+        # Кнопка «Назад к списку напитков»
+        buttons = [
+            [InlineKeyboardButton("◀️ Назад", callback_data=f"cat|{category}")],
+            [InlineKeyboardButton("🏠 В начало", callback_data="back|categories")],
+        ]
+        markup = InlineKeyboardMarkup(buttons)
+        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # Вернуться в категории
+    if action == "back" and key == "categories":
+        await start(update, context)
+        return
+
+# Ловим любые текстовые сообщения (для приватного чата)
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    # Если выбрана категория
-    if text in recipes:
-        context.user_data['category'] = text
-        drinks = list(recipes[text].keys())
-        keyboard = [[KeyboardButton(dr)] for dr in drinks]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text(f'Категория "{text}". Выберите напиток:', reply_markup=reply_markup)
-        return
-    # Если выбрано название напитка
-    category = context.user_data.get('category')
-    if category and text in recipes.get(category, {}):
-        data = recipes[category][text]
-        text_resp = f"*{text}*\n\n*Ингредиенты:*\n"
-        text_resp += '\n'.join(f"- {ing}" for ing in data['ingredients'])
-        text_resp += f"\n\n*Инструкции:*\n{data['instructions']}"
-        await update.message.reply_markdown(text_resp)
-        return
-    await update.message.reply_text('Не понял запрос. Введите /help для справки.')
+    await update.effective_message.reply_text("Напиши /start, чтобы начать.")
 
+# Логируем ошибки
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error('Error: %s', context.error)
+    logger.error("Ошибка: %s", context.error)
 
-if __name__ == '__main__':
-    app = ApplicationBuilder().token('7977580822:AAFMJlHGozEwpUXS-xcZvTsWURBfey7nMg4').build()
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('help', help_command))
+if __name__ == "__main__":
+    # Замените на ваш токен или возьмите из окружения
+    TOKEN = "YOUR_TOKEN_HERE"
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    # Регистрация хэндлеров
+    app.add_handler(CommandHandler(["start", "help"], start))
+    app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
 
-    print('Bot is running...')
+    print("Bot is running...")
     app.run_polling()

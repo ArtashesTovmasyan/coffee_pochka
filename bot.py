@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Получаем токен из переменной окружения
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = "7723188037:AAHqcYMg9Iv4D7DXtNgSsUSD1z0JqZoyYNI"
 if not TOKEN:
     raise RuntimeError("Не задана переменная окружения TELEGRAM_TOKEN")
 
